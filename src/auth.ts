@@ -1,8 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { hostname, platform } from "node:os";
 
 import open from "open";
+import * as client from "openid-client";
 
 import { CLIENT_ID, DEFAULT_SCOPES, getBaseUrl } from "./config.js";
 import {
@@ -12,94 +11,55 @@ import {
   type StoredCredentials,
 } from "./credentials.js";
 
-interface TokenResponse {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
-  token_type: "Bearer";
-  scope: string;
-}
-
-interface DeviceResponse {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
-}
-
-interface OAuthErrorBody {
-  error?: string;
-  error_description?: string;
-}
-
-export class OAuthError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
+function oauthConfiguration(baseUrl = getBaseUrl()): client.Configuration {
+  const configuration = new client.Configuration(
+    {
+      issuer: baseUrl,
+      authorization_endpoint: `${baseUrl}/o/authorize/`,
+      token_endpoint: `${baseUrl}/o/token/`,
+      revocation_endpoint: `${baseUrl}/o/revoke_token/`,
+      device_authorization_endpoint: `${baseUrl}/o/device-authorization/`,
+    },
+    CLIENT_ID,
+  );
+  if (new URL(baseUrl).protocol === "http:") {
+    client.allowInsecureRequests(configuration);
   }
+  return configuration;
 }
 
-function deviceName(): string {
-  return `${hostname()} (${platform()})`.slice(0, 100);
-}
-
-function toStored(tokens: TokenResponse): StoredCredentials {
+function toStored(tokens: client.TokenEndpointResponse): StoredCredentials {
+  const expiresIn =
+    typeof tokens.expires_in === "number" ? tokens.expires_in : 900;
   return {
     accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    accessExpiresAt: new Date(
-      Date.now() + tokens.expires_in * 1000,
-    ).toISOString(),
-    scope: tokens.scope,
+    refreshToken: String(tokens.refresh_token),
+    accessExpiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
+    scope: typeof tokens.scope === "string" ? tokens.scope : DEFAULT_SCOPES,
   };
 }
 
-async function oauthRequest<T>(
-  path: string,
-  values: Record<string, string>,
-  baseUrl = getBaseUrl(),
-): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(values),
-    signal: AbortSignal.timeout(15_000),
-  });
-  const body = (await response.json()) as T & OAuthErrorBody;
-  if (!response.ok) {
-    throw new OAuthError(
-      body.error || "authorization_error",
-      body.error_description ||
-        `Authorization failed with HTTP ${response.status}.`,
-      response.status,
-    );
-  }
-  return body;
+function oauthErrorCode(error: unknown): string | undefined {
+  return error instanceof client.ResponseBodyError ? error.error : undefined;
 }
 
-async function revokeExisting(baseUrl: string): Promise<void> {
+async function revokeExisting(
+  configuration: client.Configuration,
+  baseUrl: string,
+): Promise<void> {
   const existing = loadCredentials(baseUrl);
   if (!existing) return;
-  await oauthRequest<Record<string, never>>(
-    "/oauth/cli/revoke/",
-    { token: existing.refreshToken },
-    baseUrl,
-  );
+  await client.tokenRevocation(configuration, existing.refreshToken, {
+    token_type_hint: "refresh_token",
+  });
   deleteCredentials(baseUrl);
-}
-
-function base64Url(value: Buffer): string {
-  return value.toString("base64url");
 }
 
 function waitForAuthorization(
   server: Server,
   expectedState: string,
-): Promise<string> {
+  redirectUri: string,
+): Promise<URL> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => {
@@ -113,14 +73,14 @@ function waitForAuthorization(
     timer.unref();
 
     server.on("request", (request, response) => {
-      const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
-      if (requestUrl.pathname !== "/callback") {
+      const currentUrl = new URL(request.url || "/", redirectUri);
+      if (currentUrl.pathname !== "/callback") {
         response.writeHead(404).end("Not found");
         return;
       }
-      const state = requestUrl.searchParams.get("state");
-      const code = requestUrl.searchParams.get("code");
-      const error = requestUrl.searchParams.get("error");
+      const state = currentUrl.searchParams.get("state");
+      const code = currentUrl.searchParams.get("code");
+      const error = currentUrl.searchParams.get("error");
       const valid = state === expectedState && Boolean(code) && !error;
       response.writeHead(valid ? 200 : 400, {
         "content-type": "text/html; charset=utf-8",
@@ -138,17 +98,26 @@ function waitForAuthorization(
         reject(new Error("Authorization state did not match."));
       else if (!code)
         reject(new Error("Authorization response did not contain a code."));
-      else resolve(code);
+      else resolve(currentUrl);
     });
   });
 }
 
+function verificationUri(
+  device: client.DeviceAuthorizationResponse,
+  baseUrl: string,
+): string {
+  const raw = device.verification_uri_complete || device.verification_uri;
+  return new URL(raw, `${baseUrl}/`).toString();
+}
+
 export async function loginWithBrowser(openBrowser = true): Promise<void> {
   const baseUrl = getBaseUrl();
-  await revokeExisting(baseUrl);
-  const verifier = base64Url(randomBytes(32));
-  const challenge = base64Url(createHash("sha256").update(verifier).digest());
-  const state = base64Url(randomBytes(32));
+  const configuration = oauthConfiguration(baseUrl);
+  await revokeExisting(configuration, baseUrl);
+  const verifier = client.randomPKCECodeVerifier();
+  const challenge = await client.calculatePKCECodeChallenge(verifier);
+  const state = client.randomState();
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -160,23 +129,19 @@ export async function loginWithBrowser(openBrowser = true): Promise<void> {
     throw new Error("Could not start the local authorization callback.");
   }
   const redirectUri = `http://127.0.0.1:${address.port}/callback`;
-  const authorizationUrl = new URL("/oauth/cli/authorize/", baseUrl);
-  authorizationUrl.search = new URLSearchParams({
-    client_id: CLIENT_ID,
-    response_type: "code",
+  const authorizationUrl = client.buildAuthorizationUrl(configuration, {
     redirect_uri: redirectUri,
+    scope: DEFAULT_SCOPES,
     code_challenge: challenge,
     code_challenge_method: "S256",
     state,
-    scope: DEFAULT_SCOPES,
-    device_name: deviceName(),
-  }).toString();
+  });
 
   console.log(`Opening ${authorizationUrl.origin} to authorize TodoBud CLI.`);
   console.log(
     `If the browser does not open, visit:\n${authorizationUrl.toString()}`,
   );
-  const authorization = waitForAuthorization(server, state);
+  const authorization = waitForAuthorization(server, state, redirectUri);
   if (openBrowser) {
     try {
       await open(authorizationUrl.toString());
@@ -184,17 +149,14 @@ export async function loginWithBrowser(openBrowser = true): Promise<void> {
       // The printable URL is the supported fallback.
     }
   }
-  const code = await authorization;
-  const tokens = await oauthRequest<TokenResponse>(
-    "/oauth/cli/token/",
+  const tokens = await client.authorizationCodeGrant(
+    configuration,
+    await authorization,
     {
-      client_id: CLIENT_ID,
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: redirectUri,
-      code_verifier: verifier,
+      pkceCodeVerifier: verifier,
+      expectedState: state,
     },
-    baseUrl,
+    { redirect_uri: redirectUri },
   );
   saveCredentials(baseUrl, toStored(tokens));
   console.log(
@@ -202,83 +164,49 @@ export async function loginWithBrowser(openBrowser = true): Promise<void> {
   );
 }
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
 export async function loginWithDevice(openBrowser = true): Promise<void> {
   const baseUrl = getBaseUrl();
-  await revokeExisting(baseUrl);
-  const device = await oauthRequest<DeviceResponse>(
-    "/oauth/cli/device/code/",
-    {
-      client_id: CLIENT_ID,
-      scope: DEFAULT_SCOPES,
-      device_name: deviceName(),
-    },
-    baseUrl,
-  );
-  console.log(`Visit ${device.verification_uri}`);
+  const configuration = oauthConfiguration(baseUrl);
+  await revokeExisting(configuration, baseUrl);
+  const device = await client.initiateDeviceAuthorization(configuration, {
+    scope: DEFAULT_SCOPES,
+  });
+  const uri = verificationUri(device, baseUrl);
+  console.log(`Visit ${uri}`);
   console.log(`Enter code: ${device.user_code}`);
   if (openBrowser) {
     try {
-      await open(device.verification_uri);
+      await open(uri);
     } catch {
       // The printable URL is the supported fallback.
     }
   }
 
-  const deadline = Date.now() + device.expires_in * 1000;
-  let interval = Math.max(device.interval, 1);
-  while (Date.now() < deadline) {
-    await sleep(interval * 1000);
-    try {
-      const tokens = await oauthRequest<TokenResponse>(
-        "/oauth/cli/token/",
-        {
-          client_id: CLIENT_ID,
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-          device_code: device.device_code,
-        },
-        baseUrl,
-      );
-      saveCredentials(baseUrl, toStored(tokens));
-      console.log(
-        "Logged in. Credentials are stored in your operating-system keychain.",
-      );
-      return;
-    } catch (error) {
-      if (!(error instanceof OAuthError)) throw error;
-      if (error.code === "authorization_pending") continue;
-      if (error.code === "slow_down") {
-        interval += 5;
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error("Device authorization expired.");
+  const tokens = await client.pollDeviceAuthorizationGrant(
+    configuration,
+    device,
+  );
+  saveCredentials(baseUrl, toStored(tokens));
+  console.log(
+    "Logged in. Credentials are stored in your operating-system keychain.",
+  );
 }
 
 async function refresh(
+  configuration: client.Configuration,
   baseUrl: string,
   stored: StoredCredentials,
 ): Promise<StoredCredentials> {
   try {
-    const tokens = await oauthRequest<TokenResponse>(
-      "/oauth/cli/token/",
-      {
-        client_id: CLIENT_ID,
-        grant_type: "refresh_token",
-        refresh_token: stored.refreshToken,
-      },
-      baseUrl,
+    const tokens = await client.refreshTokenGrant(
+      configuration,
+      stored.refreshToken,
     );
     const next = toStored(tokens);
     saveCredentials(baseUrl, next);
     return next;
   } catch (error) {
-    if (error instanceof OAuthError && error.code === "invalid_grant") {
+    if (oauthErrorCode(error) === "invalid_grant") {
       deleteCredentials(baseUrl);
     }
     throw error;
@@ -301,7 +229,7 @@ export async function authorizationHeader(
     forceRefresh ||
     Date.parse(stored.accessExpiresAt) <= Date.now() + 30_000
   ) {
-    stored = await refresh(baseUrl, stored);
+    stored = await refresh(oauthConfiguration(baseUrl), baseUrl, stored);
   }
   return `Bearer ${stored.accessToken}`;
 }
@@ -318,10 +246,12 @@ export async function logout(): Promise<void> {
     console.log("Already logged out.");
     return;
   }
-  await oauthRequest<Record<string, never>>(
-    "/oauth/cli/revoke/",
-    { token: stored.refreshToken },
-    baseUrl,
+  await client.tokenRevocation(
+    oauthConfiguration(baseUrl),
+    stored.refreshToken,
+    {
+      token_type_hint: "refresh_token",
+    },
   );
   deleteCredentials(baseUrl);
   console.log("Logged out and revoked this CLI session.");

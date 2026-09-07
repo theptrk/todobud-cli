@@ -35,7 +35,7 @@ test("browser login returns to the loopback callback with PKCE", async () => {
   console.log = (message?: unknown) => {
     const text = String(message);
     const candidate = text.match(/https?:\/\/\S+/)?.[0];
-    if (candidate?.includes("/oauth/cli/authorize/")) {
+    if (candidate?.includes("/o/authorize/")) {
       authorizationUrl = new URL(candidate);
     }
   };
@@ -88,11 +88,11 @@ test("device login polls and stores credentials outside plaintext config", async
   let pollCount = 0;
   globalThis.fetch = async (input) => {
     const url = String(input);
-    if (url.endsWith("/device/code/")) {
+    if (url.includes("/o/device-authorization/")) {
       return Response.json({
         device_code: "device-secret",
         user_code: "ABCD-EFGH",
-        verification_uri: "http://127.0.0.1:8000/oauth/cli/device/",
+        verification_uri: "http://127.0.0.1:8000/o/device/",
         expires_in: 10,
         interval: 1,
       });
