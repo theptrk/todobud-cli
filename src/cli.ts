@@ -48,7 +48,13 @@ export function createProgram(): Command {
         flag: "body",
         option: "--body <text>",
         key: "body",
-        description: "Markdown notes",
+        description: "Markdown notes; alias of --description",
+      },
+      {
+        flag: "description",
+        option: "--description <text>",
+        key: "body",
+        description: "Long description",
       },
       {
         flag: "status",
@@ -73,7 +79,15 @@ export function createProgram(): Command {
         flag: "due",
         option: "--due <date>",
         key: "due_at",
-        description: "Due date (YYYY-MM-DD)",
+        description: "Alias of --due-date",
+        date: true,
+      },
+      {
+        flag: "dueDate",
+        option: "--due-date <date>",
+        key: "due_at",
+        description: "Due date (M/D/YYYY or YYYY-MM-DD)",
+        date: true,
       },
     ],
   });
@@ -105,7 +119,15 @@ export function createProgram(): Command {
         flag: "due",
         option: "--due <date>",
         key: "due_at",
-        description: "Due date (YYYY-MM-DD)",
+        description: "Alias of --due-date",
+        date: true,
+      },
+      {
+        flag: "dueDate",
+        option: "--due-date <date>",
+        key: "due_at",
+        description: "Due date (M/D/YYYY or YYYY-MM-DD)",
+        date: true,
       },
       {
         flag: "workspace",

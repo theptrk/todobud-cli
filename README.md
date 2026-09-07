@@ -50,7 +50,7 @@ that is what the API permits.
 ```sh
 todobud todos list --filter status=T --all
 todobud todos get 64
-todobud todos create "Ship it" --priority P1 --project 5
+todobud todos create "Ship it" --description "Why this matters" --due-date 1/3/2026 --priority P1 --project 5
 todobud todos update 64 --status D
 todobud todos delete 64 --yes
 

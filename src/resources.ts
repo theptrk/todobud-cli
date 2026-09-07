@@ -27,12 +27,47 @@ function parseInteger(value: string, name: string): number {
   return Number(value);
 }
 
+function isCalendarDate(year: number, month: number, day: number): boolean {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+export function parseDueDate(value: string, flag = "--due-date"): string {
+  const trimmed = value.trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (iso) {
+    const year = Number(iso[1]);
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    if (!isCalendarDate(year, month, day)) {
+      throw new Error(`${flag} is not a real date.`);
+    }
+    return trimmed;
+  }
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed);
+  if (us) {
+    const month = Number(us[1]);
+    const day = Number(us[2]);
+    const year = Number(us[3]);
+    if (!isCalendarDate(year, month, day)) {
+      throw new Error(`${flag} is not a real date.`);
+    }
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+  throw new Error(`${flag} must be YYYY-MM-DD or M/D/YYYY.`);
+}
+
 export interface ResourceField {
   flag: string;
   option: string;
   key: string;
   description: string;
   integer?: boolean;
+  date?: boolean;
 }
 
 export function payloadFromOptions(
@@ -45,9 +80,13 @@ export function payloadFromOptions(
   for (const field of fields) {
     const value = options[field.flag];
     if (value === undefined) continue;
-    payload[field.key] = field.integer
-      ? parseInteger(value, `--${field.flag}`)
-      : value;
+    if (field.integer) {
+      payload[field.key] = parseInteger(value, `--${field.flag}`);
+    } else if (field.date) {
+      payload[field.key] = parseDueDate(value, `--${field.flag}`);
+    } else {
+      payload[field.key] = value;
+    }
   }
   return payload;
 }

@@ -6,7 +6,11 @@ import test from "node:test";
 
 import { apiRequest, listAll, redact } from "../src/api.js";
 import { getBaseUrl } from "../src/config.js";
-import { parseData, payloadFromOptions } from "../src/resources.js";
+import {
+  parseData,
+  parseDueDate,
+  payloadFromOptions,
+} from "../src/resources.js";
 import { latestVersion } from "../src/update.js";
 
 test("configuration permits HTTPS and local HTTP only", () => {
@@ -27,6 +31,13 @@ test("JSON data parsing requires an object", () => {
   assert.throws(() => parseData("{"), /valid JSON/);
 });
 
+test("due dates accept ISO and M/D/YYYY", () => {
+  assert.equal(parseDueDate("2026-01-03"), "2026-01-03");
+  assert.equal(parseDueDate("1/3/2026"), "2026-01-03");
+  assert.throws(() => parseDueDate("2/31/2026"), /not a real date/);
+  assert.throws(() => parseDueDate("tomorrow"), /M\/D\/YYYY/);
+});
+
 test("todo flags become an API payload", () => {
   const fields = [
     {
@@ -43,19 +54,37 @@ test("todo flags become an API payload", () => {
       integer: true,
     },
     {
-      flag: "due",
-      option: "--due <date>",
+      flag: "description",
+      option: "--description <text>",
+      key: "body",
+      description: "description",
+    },
+    {
+      flag: "dueDate",
+      option: "--due-date <date>",
       key: "due_at",
       description: "due",
+      date: true,
     },
   ];
   assert.deepEqual(
     payloadFromOptions(
-      { status: "IP", project: "5", due: "2026-09-10" },
+      {
+        status: "IP",
+        project: "5",
+        description: "Why this matters",
+        dueDate: "1/3/2026",
+      },
       fields,
       "Ship it",
     ),
-    { title: "Ship it", status: "IP", project: 5, due_at: "2026-09-10" },
+    {
+      title: "Ship it",
+      status: "IP",
+      project: 5,
+      body: "Why this matters",
+      due_at: "2026-01-03",
+    },
   );
   assert.deepEqual(
     payloadFromOptions({ data: '{"priority":"P1"}', status: "D" }, fields),
