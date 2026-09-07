@@ -1,0 +1,54 @@
+{
+  "name": "todobud",
+  "version": "0.1.0",
+  "description": "Official command-line interface for TodoBud",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "todobud": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theptrk/todobud-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/theptrk/todobud-cli/issues"
+  },
+  "homepage": "https://github.com/theptrk/todobud-cli#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build && node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "prepack": "npm test",
+    "release": "changeset publish"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "^2.0.0",
+    "commander": "^15.0.0",
+    "open": "^11.0.2",
+    "openid-client": "^6.8.8",
+    "semver": "^7.7.2"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.7",
+    "@types/node": "^24.3.1",
+    "@types/semver": "^7.7.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
