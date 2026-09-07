@@ -20,6 +20,38 @@ export function parseData(value: string): JsonObject {
   return parsed as JsonObject;
 }
 
+function parseInteger(value: string, name: string): number {
+  if (!/^-?\d+$/.test(value)) {
+    throw new Error(`${name} must be an integer.`);
+  }
+  return Number(value);
+}
+
+export interface ResourceField {
+  flag: string;
+  option: string;
+  key: string;
+  description: string;
+  integer?: boolean;
+}
+
+export function payloadFromOptions(
+  options: Record<string, string | undefined>,
+  fields: ResourceField[],
+  title?: string,
+): JsonObject {
+  const payload: JsonObject = options.data ? parseData(options.data) : {};
+  if (title) payload.title = title;
+  for (const field of fields) {
+    const value = options[field.flag];
+    if (value === undefined) continue;
+    payload[field.key] = field.integer
+      ? parseInteger(value, `--${field.flag}`)
+      : value;
+  }
+  return payload;
+}
+
 function jsonOutput(command: Command): boolean {
   return Boolean(command.optsWithGlobals().json);
 }
@@ -41,10 +73,20 @@ function buildListPath(
   return `${path}/${suffix ? `?${suffix}` : ""}`;
 }
 
+function addFieldOptions(command: Command, fields: ResourceField[]): Command {
+  for (const field of fields) {
+    command.option(field.option, field.description);
+  }
+  command.option("--data <json>", "JSON object merged with the other flags");
+  return command;
+}
+
 interface ResourceDefinition {
   command: string;
   singular: string;
   path: string;
+  titleArgument?: boolean;
+  fields?: ResourceField[];
   update?: boolean;
   delete?: boolean;
 }
@@ -53,6 +95,7 @@ export function addResourceCommands(
   program: Command,
   definition: ResourceDefinition,
 ): void {
+  const fields = definition.fields || [];
   const group = program
     .command(definition.command)
     .description(`Manage TodoBud ${definition.command}`);
@@ -101,35 +144,78 @@ export function addResourceCommands(
       printValue(value, jsonOutput(command));
     });
 
-  group
+  const create = group
     .command("create")
-    .description(`Create a ${definition.singular}`)
-    .requiredOption("--data <json>", "Resource fields as a JSON object")
-    .action(async (options: { data: string }, command: Command) => {
-      const value = await apiRequest<JsonObject>(
-        "POST",
-        `${definition.path}/`,
-        parseData(options.data),
+    .description(`Create a ${definition.singular}`);
+  if (definition.titleArgument) {
+    create.argument("[title]", `${definition.singular} title`);
+  }
+  addFieldOptions(create, fields);
+  const submitCreate = async (
+    title: string | undefined,
+    options: Record<string, string | undefined>,
+    command: Command,
+  ) => {
+    const payload = payloadFromOptions(options, fields, title);
+    if (definition.titleArgument && !payload.title) {
+      throw new Error(
+        `Provide a title, for example \`todobud ${definition.command} create "Ship it"\`.`,
       );
-      printValue(value, jsonOutput(command));
-    });
+    }
+    if (Object.keys(payload).length === 0) {
+      throw new Error(
+        `Provide fields to create, for example \`todobud ${definition.command} create --help\`.`,
+      );
+    }
+    const value = await apiRequest<JsonObject>(
+      "POST",
+      `${definition.path}/`,
+      payload,
+    );
+    printValue(value, jsonOutput(command));
+  };
+  if (definition.titleArgument) {
+    create.action(
+      async (
+        title: string | undefined,
+        options: Record<string, string | undefined>,
+        command: Command,
+      ) => submitCreate(title, options, command),
+    );
+  } else {
+    create.action(
+      async (options: Record<string, string | undefined>, command: Command) =>
+        submitCreate(undefined, options, command),
+    );
+  }
 
   if (definition.update !== false) {
-    group
-      .command("update")
-      .description(`Update a ${definition.singular}`)
-      .argument("<id>", `${definition.singular} ID`)
-      .requiredOption("--data <json>", "Fields to update as a JSON object")
-      .action(
-        async (id: string, options: { data: string }, command: Command) => {
-          const value = await apiRequest<JsonObject>(
-            "PATCH",
-            `${definition.path}/${encodeURIComponent(id)}/`,
-            parseData(options.data),
+    addFieldOptions(
+      group
+        .command("update")
+        .description(`Update a ${definition.singular}`)
+        .argument("<id>", `${definition.singular} ID`),
+      fields,
+    ).action(
+      async (
+        id: string,
+        options: Record<string, string | undefined>,
+        command: Command,
+      ) => {
+        const payload = payloadFromOptions(options, fields);
+        if (Object.keys(payload).length === 0) {
+          throw new Error(
+            `Provide a field to change, for example \`todobud ${definition.command} update ${id} --status D\`.`,
           );
-          printValue(value, jsonOutput(command));
-        },
-      );
+        }
+        const value = await apiRequest<JsonObject>(
+          "PATCH",
+          `${definition.path}/${encodeURIComponent(id)}/`,
+          payload,
+        );
+        printValue(value, jsonOutput(command));
+      },
+    );
   }
 
   if (definition.delete !== false) {

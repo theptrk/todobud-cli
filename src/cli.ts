@@ -36,16 +36,126 @@ export function createProgram(): Command {
     command: "todos",
     singular: "todo",
     path: "todos",
+    titleArgument: true,
+    fields: [
+      {
+        flag: "title",
+        option: "--title <text>",
+        key: "title",
+        description: "Todo title",
+      },
+      {
+        flag: "body",
+        option: "--body <text>",
+        key: "body",
+        description: "Markdown notes",
+      },
+      {
+        flag: "status",
+        option: "--status <code>",
+        key: "status",
+        description: "T, IP, D, or C",
+      },
+      {
+        flag: "priority",
+        option: "--priority <code>",
+        key: "priority",
+        description: "P0, P1, P2, or P3",
+      },
+      {
+        flag: "project",
+        option: "--project <id>",
+        key: "project",
+        description: "Project id",
+        integer: true,
+      },
+      {
+        flag: "due",
+        option: "--due <date>",
+        key: "due_at",
+        description: "Due date (YYYY-MM-DD)",
+      },
+    ],
   });
   addResourceCommands(program, {
     command: "projects",
     singular: "project",
     path: "projects",
+    titleArgument: true,
+    fields: [
+      {
+        flag: "title",
+        option: "--title <text>",
+        key: "title",
+        description: "Project title",
+      },
+      {
+        flag: "body",
+        option: "--body <text>",
+        key: "body",
+        description: "Markdown notes",
+      },
+      {
+        flag: "status",
+        option: "--status <code>",
+        key: "status",
+        description: "Project status",
+      },
+      {
+        flag: "due",
+        option: "--due <date>",
+        key: "due_at",
+        description: "Due date (YYYY-MM-DD)",
+      },
+      {
+        flag: "workspace",
+        option: "--workspace <id>",
+        key: "workspace",
+        description: "Workspace id",
+        integer: true,
+      },
+    ],
   });
   addResourceCommands(program, {
     command: "notes",
     singular: "note",
     path: "notes",
+    titleArgument: true,
+    fields: [
+      {
+        flag: "title",
+        option: "--title <text>",
+        key: "title",
+        description: "Note title",
+      },
+      {
+        flag: "body",
+        option: "--body <text>",
+        key: "body",
+        description: "Markdown source",
+      },
+      {
+        flag: "todo",
+        option: "--todo <id>",
+        key: "todo",
+        description: "Attach to a todo",
+        integer: true,
+      },
+      {
+        flag: "project",
+        option: "--project <id>",
+        key: "project",
+        description: "Attach to a project",
+        integer: true,
+      },
+      {
+        flag: "workspace",
+        option: "--workspace <id>",
+        key: "workspace",
+        description: "Attach to a workspace",
+        integer: true,
+      },
+    ],
   });
   addResourceCommands(program, {
     command: "activities",
@@ -53,6 +163,33 @@ export function createProgram(): Command {
     path: "activities",
     update: false,
     delete: false,
+    fields: [
+      {
+        flag: "todo",
+        option: "--todo <id>",
+        key: "todo",
+        description: "Todo id",
+        integer: true,
+      },
+      {
+        flag: "kind",
+        option: "--kind <kind>",
+        key: "kind",
+        description: "comment or link",
+      },
+      {
+        flag: "message",
+        option: "--message <text>",
+        key: "message",
+        description: "Comment text",
+      },
+      {
+        flag: "url",
+        option: "--url <url>",
+        key: "url",
+        description: "Link URL",
+      },
+    ],
   });
 
   program

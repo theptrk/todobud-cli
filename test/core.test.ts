@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { apiRequest, listAll, redact } from "../src/api.js";
 import { getBaseUrl } from "../src/config.js";
-import { parseData } from "../src/resources.js";
+import { parseData, payloadFromOptions } from "../src/resources.js";
 import { latestVersion } from "../src/update.js";
 
 test("configuration permits HTTPS and local HTTP only", () => {
@@ -25,6 +25,46 @@ test("JSON data parsing requires an object", () => {
   assert.deepEqual(parseData('{"title":"Test"}'), { title: "Test" });
   assert.throws(() => parseData("[]"), /JSON object/);
   assert.throws(() => parseData("{"), /valid JSON/);
+});
+
+test("todo flags become an API payload", () => {
+  const fields = [
+    {
+      flag: "status",
+      option: "--status <code>",
+      key: "status",
+      description: "status",
+    },
+    {
+      flag: "project",
+      option: "--project <id>",
+      key: "project",
+      description: "project",
+      integer: true,
+    },
+    {
+      flag: "due",
+      option: "--due <date>",
+      key: "due_at",
+      description: "due",
+    },
+  ];
+  assert.deepEqual(
+    payloadFromOptions(
+      { status: "IP", project: "5", due: "2026-09-10" },
+      fields,
+      "Ship it",
+    ),
+    { title: "Ship it", status: "IP", project: 5, due_at: "2026-09-10" },
+  );
+  assert.deepEqual(
+    payloadFromOptions({ data: '{"priority":"P1"}', status: "D" }, fields),
+    { priority: "P1", status: "D" },
+  );
+  assert.throws(
+    () => payloadFromOptions({ project: "board" }, fields),
+    /integer/,
+  );
 });
 
 test("credential-shaped values are redacted", () => {

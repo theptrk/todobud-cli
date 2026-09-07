@@ -50,14 +50,16 @@ that is what the API permits.
 ```sh
 todobud todos list --filter status=T --all
 todobud todos get 64
-todobud todos create --data '{"title":"Ship it","priority":"P1","project":5}'
-todobud todos update 64 --data '{"status":"D"}'
+todobud todos create "Ship it" --priority P1 --project 5
+todobud todos update 64 --status D
 todobud todos delete 64 --yes
 
 todobud projects list
-todobud notes create --data '{"title":"Plan","body":"# Plan","todo":64}'
-todobud activities create --data '{"todo":64,"kind":"comment","message":"Done"}'
+todobud notes create "Plan" --body "# Plan" --todo 64
+todobud activities create --todo 64 --kind comment --message "Done"
 ```
+
+`--data '{"title":"Ship it"}'` still works for scripts.
 
 Add `--json` before the resource name for stable machine-readable output.
 API filters can be repeated with `--filter key=value`.
