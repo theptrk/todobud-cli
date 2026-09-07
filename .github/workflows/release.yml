@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+jobs:
+  mode:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      selected: ${{ steps.select.outputs.mode }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - id: select
+        uses: changesets/action/select-mode@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
+
+  version:
+    needs: mode
+    if: needs.mode.outputs.selected == 'version'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - uses: changesets/action/version@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
+        with:
+          pr-title: Release TodoBud CLI
+          commit-message: Version TodoBud CLI
+
+  publish:
+    needs: mode
+    if: needs.mode.outputs.selected == 'publish' && vars.NPM_TRUSTED_PUBLISHING_READY == 'true'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm install --global npm@latest
+      - run: npm ci
+      - run: npm test
+      - uses: changesets/action/publish@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
+        with:
+          script: npm run release
+          create-github-releases: true
+          push-git-tags: true
