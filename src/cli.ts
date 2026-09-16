@@ -1,12 +1,7 @@
 import { Command } from "commander";
-import { apiRequest } from "./api.js";
+import { apiRequest, resolveWorkspace } from "./api.js";
 import { printValue } from "./output.js";
-import {
-  selectWorkspace,
-  saveWorkspace,
-  workspaceLabel,
-  type Workspace,
-} from "./workspace.js";
+import { selectWorkspace, saveWorkspace, workspaceLabel } from "./workspace.js";
 
 import {
   authStatus,
@@ -48,12 +43,7 @@ export function createProgram(): Command {
       "Save .todobud.json in the current directory only",
     )
     .action(async (identifier: string) => {
-      const resolved = await apiRequest<Workspace>(
-        "GET",
-        "workspaces/current/",
-        undefined,
-        { workspace: identifier, skipDefault: true },
-      );
+      const resolved = await resolveWorkspace(identifier);
       await saveWorkspace(resolved);
       if (program.opts().json) printValue(resolved, true);
       else

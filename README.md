@@ -108,11 +108,14 @@ workspace defaults. You can export `TODOBUD_WORKSPACE` using your shell or diren
 The CLI resolves the selection with a read, then sends the resolved integer ID
 in `X-Workspace` on the write. The server also defaults omitted identifiers to
 personal. Explicit invalid or inaccessible selections fail without falling back.
+Resolution accepts read or write scope; write-only keys do not need content read
+permission. Invalid or mismatched resolution stops the write and config save.
 `personal` is a CLI convenience, not a team slug or URL. While team access is
 disabled on the server, team selections return 404 even for members.
 
 Each successful write (including deletes) prints `Workspace: acme (#12)` to
 stderr, using the server's response headers. `--json` stdout remains valid JSON.
+JSON deletes return `{ "deleted": true, "id": "12" }`.
 If a response lacks confirmation, the CLI says the write succeeded without
 confirmation and asks you to verify before retrying.
 

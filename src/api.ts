@@ -79,23 +79,7 @@ export async function apiRequest<T>(
     }
     // Resolve before writing, then pin the integer id so a renamed/reassigned
     // slug cannot retarget the mutation between discovery and submission.
-    const resolved = await apiRequest<Workspace>(
-      "GET",
-      "workspaces/current/",
-      undefined,
-      {
-        workspace: identifier,
-        skipDefault: true,
-        label: selection.label ?? identifier,
-      },
-    );
-    if (
-      !Number.isSafeInteger(resolved.id) ||
-      resolved.id <= 0 ||
-      !["personal", "team"].includes(resolved.kind) ||
-      (identifier === "personal" && resolved.kind !== "personal")
-    )
-      throw new Error("Server returned an invalid workspace.");
+    const resolved = await resolveWorkspace(identifier);
     expectedWorkspace = resolved;
     identifier = String(resolved.id);
   }
@@ -121,18 +105,47 @@ export async function apiRequest<T>(
   if (mutation) {
     const id = response.headers.get("X-Workspace-ID");
     const kind = response.headers.get("X-Workspace-Kind");
-    if (id !== identifier || kind !== expectedWorkspace?.kind) {
+    const slug = response.headers.get("X-Workspace-Slug");
+    if (
+      id !== identifier ||
+      kind !== expectedWorkspace?.kind ||
+      (kind === "team" && !slug?.trim())
+    ) {
       throw new Error(
         "The write succeeded but the server did not confirm the expected workspace. Verify it before retrying.",
       );
     }
-    const slug = response.headers.get("X-Workspace-Slug");
     // Keep stdout valid JSON when --json is used; receipts go to stderr.
     console.error(
       `Workspace: ${workspaceLabel({ id: Number(id), kind: kind as Workspace["kind"], slug, name: "" })}`,
     );
   }
   return responseBody as T;
+}
+
+export async function resolveWorkspace(identifier: string): Promise<Workspace> {
+  identifier = identifier.trim();
+  if (!identifier) throw new Error("Workspace selection cannot be empty.");
+  const numeric = /^\d+$/.test(identifier);
+  const resolved = await apiRequest<Workspace | null>(
+    "GET",
+    "workspaces/current/",
+    undefined,
+    { workspace: identifier, skipDefault: true },
+  );
+  if (
+    !resolved ||
+    !Number.isSafeInteger(resolved.id) ||
+    resolved.id <= 0 ||
+    !["personal", "team"].includes(resolved.kind) ||
+    (resolved.kind === "team" &&
+      (typeof resolved.slug !== "string" || !resolved.slug.trim())) ||
+    (identifier === "personal" && resolved.kind !== "personal") ||
+    (identifier !== "personal" && !numeric && resolved.kind !== "team") ||
+    (numeric && String(resolved.id) !== String(Number(identifier)))
+  )
+    throw new Error("Server returned an invalid workspace.");
+  return resolved;
 }
 
 interface Page<T> {

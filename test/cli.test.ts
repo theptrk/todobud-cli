@@ -9,6 +9,41 @@ import test from "node:test";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 
+test("compiled CLI delete keeps JSON stdout separate from workspace receipt", async () => {
+  let writes = 0;
+  const server = createServer((request, response) => {
+    if (request.url === "/api/v1/workspaces/current/") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ id: 3, kind: "personal", slug: null }));
+      return;
+    }
+    assert.equal(request.method, "DELETE");
+    assert.equal(request.url, "/api/v1/todos/9/");
+    assert.equal(request.headers["x-workspace"], "3");
+    writes++;
+    response.setHeader("X-Workspace-ID", "3");
+    response.setHeader("X-Workspace-Kind", "personal");
+    response.statusCode = 204;
+    response.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  try {
+    const result = await runCli(["--json", "todos", "delete", "9", "--yes"], {
+      TODOBUD_API_KEY: "integration-key",
+      TODOBUD_BASE_URL: `http://127.0.0.1:${address.port}`,
+      TODOBUD_DISABLE_UPDATE_CHECK: "1",
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { deleted: true, id: "9" });
+    assert.match(result.stderr, /Workspace: personal \(#3\)/);
+    assert.equal(writes, 1);
+  } finally {
+    server.close();
+  }
+});
+
 function runCli(
   args: string[],
   env: NodeJS.ProcessEnv,

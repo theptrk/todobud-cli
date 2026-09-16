@@ -3,12 +3,94 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { apiRequest } from "../src/api.js";
+import { apiRequest, resolveWorkspace } from "../src/api.js";
 import {
   saveWorkspace,
   selectWorkspace,
   workspaceSelection,
 } from "../src/workspace.js";
+
+for (const resolved of [
+  null,
+  { id: 12, kind: "team", slug: "other" },
+  { id: 9, kind: "team", slug: null },
+]) {
+  test(`invalid resolution cannot retarget a numeric selection: ${JSON.stringify(resolved)}`, async () =>
+    withProject(async () => {
+      selectWorkspace("9");
+      const originalFetch = globalThis.fetch;
+      let writes = 0;
+      globalThis.fetch = async (_url, init) => {
+        if (init?.method === "GET") return Response.json(resolved);
+        writes++;
+        return new Response(null, { status: 204 });
+      };
+      try {
+        await assert.rejects(
+          () => apiRequest("POST", "todos/", { title: "No" }),
+          /invalid workspace/,
+        );
+        assert.equal(writes, 0);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }));
+}
+
+test("personal selection cannot resolve to a team when saving directory config", async () =>
+  withProject(async (directory) => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Response.json({ id: 9, kind: "team", slug: "team" });
+    try {
+      await assert.rejects(
+        async () => saveWorkspace(await resolveWorkspace("personal")),
+        /invalid workspace/,
+      );
+      await assert.rejects(readFile(join(directory, ".todobud.json")), {
+        code: "ENOENT",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }));
+
+test("a team slug cannot fall back to personal resolution", async () =>
+  withProject(async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Response.json({ id: 3, kind: "personal", slug: null });
+    try {
+      await assert.rejects(() => resolveWorkspace("team"), /invalid workspace/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }));
+
+test("a team receipt without a slug does not silently report null or repeat the write", async () =>
+  withProject(async () => {
+    selectWorkspace("9");
+    const originalFetch = globalThis.fetch;
+    let writes = 0;
+    globalThis.fetch = async (_url, init) => {
+      if (init?.method === "GET")
+        return Response.json({ id: 9, kind: "team", slug: "team" });
+      writes++;
+      return new Response(null, {
+        status: 204,
+        headers: { "X-Workspace-ID": "9", "X-Workspace-Kind": "team" },
+      });
+    };
+    try {
+      await assert.rejects(
+        () => apiRequest("DELETE", "todos/1/"),
+        /write succeeded.*Verify it before retrying/,
+      );
+      assert.equal(writes, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }));
 
 async function withProject(
   run: (directory: string) => Promise<void>,
