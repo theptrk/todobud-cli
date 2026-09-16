@@ -1,11 +1,12 @@
 name: Release
 
 on:
+  pull_request:
   push:
     branches: [main]
 
 concurrency:
-  group: npm-release
+  group: npm-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -24,10 +25,15 @@ jobs:
       - run: npm ci
       - id: select
         uses: changesets/action/select-mode@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
+      - name: Verify npm publishing is configured
+        if: github.event_name == 'push' && steps.select.outputs.mode == 'publish' && vars.NPM_TRUSTED_PUBLISHING_READY != 'true'
+        run: |
+          echo "::error::npm publishing is disabled. Configure the todobud trusted publisher for theptrk/todobud-cli, release.yml, environment npm; then set NPM_TRUSTED_PUBLISHING_READY=true."
+          exit 1
 
   version:
     needs: mode
-    if: needs.mode.outputs.selected == 'version'
+    if: github.event_name == 'push' && needs.mode.outputs.selected == 'version'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,12 +47,13 @@ jobs:
       - run: npm ci
       - uses: changesets/action/version@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
         with:
+          script: npm run version-packages
           pr-title: Release TodoBud CLI
           commit-message: Version TodoBud CLI
 
   publish:
     needs: mode
-    if: needs.mode.outputs.selected == 'publish' && vars.NPM_TRUSTED_PUBLISHING_READY == 'true'
+    if: github.event_name == 'push' && needs.mode.outputs.selected == 'publish' && vars.NPM_TRUSTED_PUBLISHING_READY == 'true'
     runs-on: ubuntu-latest
     environment: npm
     permissions:

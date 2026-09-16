@@ -34,6 +34,7 @@
     "format:check": "prettier --check .",
     "test": "npm run build && node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "prepack": "npm test",
+    "version-packages": "changeset version && npm install --package-lock-only --ignore-scripts",
     "release": "changeset publish"
   },
   "dependencies": {
@@ -44,7 +45,7 @@
     "semver": "^7.7.2"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.29.7",
+    "@changesets/cli": "^3.0.3",
     "@types/node": "^24.3.1",
     "@types/semver": "^7.7.0",
     "prettier": "^3.9.6",

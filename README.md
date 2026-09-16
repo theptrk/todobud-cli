@@ -77,6 +77,30 @@ npm install -g todobud@latest
 Set `TODOBUD_DISABLE_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1` to disable
 automatic checks. Checks are disabled automatically in CI.
 
+### Release deployment
+
+Merging application changes does not publish an npm version. The release workflow
+uses Changesets CLI v3 with Changesets action v2: it opens a version PR, then
+publishes after that PR is merged. Deploy required server changes first.
+
+Repository setup requires GitHub Actions to be allowed to create pull requests.
+On npm, configure the `todobud` package's GitHub trusted publisher with user
+`theptrk`, repository `todobud-cli`, workflow `release.yml`, and environment `npm`,
+allowing direct `npm publish`. After setup, set the repository variable
+`NPM_TRUSTED_PUBLISHING_READY=true`. Publishing uses GitHub OIDC without an npm token.
+The release workflow fails explicitly if a version is ready but this gate is unset.
+
+Verify delivery using the public registry and the installed CLI:
+
+```sh
+npm view todobud dist-tags.latest
+todobud --version
+todobud update
+```
+
+The registry's latest version must advance before the installed CLI can announce
+an update. A passing build or merged PR alone does not establish deployment.
+
 ## Development
 
 ```sh
