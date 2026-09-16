@@ -263,12 +263,13 @@ export function addResourceCommands(
       .description(`Permanently delete a ${definition.singular}`)
       .argument("<id>", `${definition.singular} ID`)
       .requiredOption("--yes", "Confirm permanent deletion")
-      .action(async (id: string) => {
+      .action(async (id: string, _options: unknown, command: Command) => {
         await apiRequest<void>(
           "DELETE",
           `${definition.path}/${encodeURIComponent(id)}/`,
         );
-        console.log(`Deleted ${definition.singular} ${id}.`);
+        if (jsonOutput(command)) printValue({ deleted: true, id }, true);
+        else console.log(`Deleted ${definition.singular} ${id}.`);
       });
   }
 }

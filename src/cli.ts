@@ -1,4 +1,7 @@
 import { Command } from "commander";
+import { apiRequest, resolveWorkspace } from "./api.js";
+import { printValue } from "./output.js";
+import { selectWorkspace, saveWorkspace, workspaceLabel } from "./workspace.js";
 
 import {
   authStatus,
@@ -14,7 +17,40 @@ export function createProgram(): Command {
     .name("todobud")
     .description("Manage TodoBud from your terminal")
     .version(currentVersion())
-    .option("--json", "Print machine-readable JSON");
+    .option("--json", "Print machine-readable JSON")
+    .option("--workspace <id-or-slug>", "Workspace id, team slug, or personal")
+    .hook("preAction", (_root, command) => {
+      selectWorkspace(
+        command.optsWithGlobals().workspace as string | undefined,
+      );
+    });
+
+  const workspace = program
+    .command("workspace")
+    .description("Choose the workspace for API requests");
+  workspace.command("list").action(async () =>
+    printValue(
+      await apiRequest("GET", "workspaces/", undefined, {
+        skipDefault: true,
+      }),
+      Boolean(program.opts().json),
+    ),
+  );
+  workspace
+    .command("use <id-or-slug>")
+    .requiredOption(
+      "--here",
+      "Save .todobud.json in the current directory only",
+    )
+    .action(async (identifier: string) => {
+      const resolved = await resolveWorkspace(identifier);
+      await saveWorkspace(resolved);
+      if (program.opts().json) printValue(resolved, true);
+      else
+        console.log(
+          `Directory workspace: ${workspaceLabel(resolved)} (.todobud.json)`,
+        );
+    });
 
   const auth = program.command("auth").description("Manage CLI authentication");
   auth
@@ -129,13 +165,6 @@ export function createProgram(): Command {
         description: "Due date (M/D/YYYY or YYYY-MM-DD)",
         date: true,
       },
-      {
-        flag: "workspace",
-        option: "--workspace <id>",
-        key: "workspace",
-        description: "Workspace id",
-        integer: true,
-      },
     ],
   });
   addResourceCommands(program, {
@@ -168,13 +197,6 @@ export function createProgram(): Command {
         option: "--project <id>",
         key: "project",
         description: "Attach to a project",
-        integer: true,
-      },
-      {
-        flag: "workspace",
-        option: "--workspace <id>",
-        key: "workspace",
-        description: "Attach to a workspace",
         integer: true,
       },
     ],
