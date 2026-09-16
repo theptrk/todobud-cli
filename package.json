@@ -1,6 +1,6 @@
 {
   "name": "todobud",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Official command-line interface for TodoBud",
   "license": "UNLICENSED",
   "type": "module",
