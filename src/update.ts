@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 import semver from "semver";
 
 const CHECK_INTERVAL = 24 * 60 * 60 * 1000;
+const AUTOMATIC_TIMEOUT = 1_000;
+const EXPLICIT_TIMEOUT = 10_000;
 const REGISTRY_URL = "https://registry.npmjs.org/todobud/latest";
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -47,7 +49,7 @@ export async function latestVersion(force = false): Promise<string | null> {
   try {
     const response = await fetch(REGISTRY_URL, {
       headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(1_000),
+      signal: AbortSignal.timeout(force ? EXPLICIT_TIMEOUT : AUTOMATIC_TIMEOUT),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const body = (await response.json()) as { version?: string };
@@ -59,14 +61,18 @@ export async function latestVersion(force = false): Promise<string | null> {
     });
     return latest || null;
   } catch {
-    await writeCache({ checkedAt: new Date().toISOString() }).catch(
-      () => undefined,
-    );
+    await writeCache({
+      checkedAt: new Date().toISOString(),
+      ...(cached?.latest ? { latest: cached.latest } : {}),
+    }).catch(() => undefined);
     return null;
   }
 }
 
+let reportedExplicitly = false;
+
 export async function reportUpdate(force = false): Promise<void> {
+  if (force) reportedExplicitly = true;
   const latest = await latestVersion(force);
   const current = packageJson.version;
   if (!latest) {
@@ -87,6 +93,7 @@ export async function reportUpdate(force = false): Promise<void> {
 
 export async function automaticUpdateCheck(): Promise<void> {
   if (
+    reportedExplicitly ||
     process.env.CI ||
     process.env.NO_UPDATE_NOTIFIER ||
     process.env.TODOBUD_DISABLE_UPDATE_CHECK === "1" ||

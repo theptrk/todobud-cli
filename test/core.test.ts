@@ -11,7 +11,11 @@ import {
   parseDueDate,
   payloadFromOptions,
 } from "../src/resources.js";
-import { latestVersion } from "../src/update.js";
+import {
+  automaticUpdateCheck,
+  latestVersion,
+  reportUpdate,
+} from "../src/update.js";
 
 test("configuration permits HTTPS and local HTTP only", () => {
   process.env.TODOBUD_BASE_URL = "https://example.com/";
@@ -175,4 +179,53 @@ test("update checks cache valid npm metadata", async () => {
     delete process.env.XDG_CACHE_HOME;
     await rm(cacheRoot, { recursive: true, force: true });
   }
+});
+
+test("failed update checks keep the last known release", async () => {
+  const cacheRoot = await mkdtemp(join(tmpdir(), "todobud-update-"));
+  process.env.XDG_CACHE_HOME = cacheRoot;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ version: "99.0.0" });
+  try {
+    assert.equal(await latestVersion(true), "99.0.0");
+    globalThis.fetch = async () => {
+      throw new Error("timed out");
+    };
+    assert.equal(await latestVersion(true), null);
+    assert.equal(await latestVersion(false), "99.0.0");
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.XDG_CACHE_HOME;
+    await rm(cacheRoot, { recursive: true, force: true });
+  }
+});
+
+test("update command output is not repeated by the automatic check", async () => {
+  const cacheRoot = await mkdtemp(join(tmpdir(), "todobud-update-"));
+  process.env.XDG_CACHE_HOME = cacheRoot;
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalCI = process.env.CI;
+  const originalTTY = process.stderr.isTTY;
+  const lines: string[] = [];
+  globalThis.fetch = async () => Response.json({ version: "99.0.0" });
+  console.log = (line: string) => lines.push(line);
+  console.error = (line: string) => lines.push(line);
+  delete process.env.CI;
+  process.stderr.isTTY = true;
+  try {
+    await reportUpdate(true);
+    await automaticUpdateCheck();
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    console.error = originalError;
+    if (originalCI !== undefined) process.env.CI = originalCI;
+    process.stderr.isTTY = originalTTY;
+    delete process.env.XDG_CACHE_HOME;
+    await rm(cacheRoot, { recursive: true, force: true });
+  }
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /TodoBud CLI 99\.0\.0 is available/);
 });
