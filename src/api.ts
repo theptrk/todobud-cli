@@ -1,5 +1,10 @@
 import { authorizationHeader } from "./auth.js";
 import { getBaseUrl } from "./config.js";
+import {
+  workspaceSelection,
+  workspaceLabel,
+  type Workspace,
+} from "./workspace.js";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -32,6 +37,7 @@ async function performRequest(
   path: string,
   body: JsonObject | undefined,
   forceRefresh: boolean,
+  workspace?: string,
 ): Promise<Response> {
   const authorization = await authorizationHeader(forceRefresh);
   return fetch(`${getBaseUrl()}/api/v1/${path.replace(/^\/+/, "")}`, {
@@ -39,6 +45,7 @@ async function performRequest(
     headers: {
       authorization,
       accept: "application/json",
+      ...(workspace !== undefined ? { "X-Workspace": workspace } : {}),
       ...(body ? { "content-type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -50,19 +57,79 @@ export async function apiRequest<T>(
   method: string,
   path: string,
   body?: JsonObject,
+  options?: { workspace?: string; skipDefault?: boolean; label?: string },
 ): Promise<T> {
-  let response = await performRequest(method, path, body, false);
-  if (response.status === 401 && !process.env.TODOBUD_API_KEY) {
-    response = await performRequest(method, path, body, true);
+  const selection = options?.skipDefault
+    ? {
+        identifier: options.workspace,
+        label: options.label ?? options.workspace,
+      }
+    : options?.workspace !== undefined
+      ? {
+          identifier: options.workspace,
+          label: options.label ?? options.workspace,
+        }
+      : await workspaceSelection();
+  const mutation = !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+  let identifier = selection.identifier;
+  let expectedWorkspace: Workspace | undefined;
+  if (mutation) {
+    if (!identifier?.trim()) {
+      throw new Error("Workspace selection cannot be empty.");
+    }
+    // Resolve before writing, then pin the integer id so a renamed/reassigned
+    // slug cannot retarget the mutation between discovery and submission.
+    const resolved = await apiRequest<Workspace>(
+      "GET",
+      "workspaces/current/",
+      undefined,
+      {
+        workspace: identifier,
+        skipDefault: true,
+        label: selection.label ?? identifier,
+      },
+    );
+    if (
+      !Number.isSafeInteger(resolved.id) ||
+      resolved.id <= 0 ||
+      !["personal", "team"].includes(resolved.kind) ||
+      (identifier === "personal" && resolved.kind !== "personal")
+    )
+      throw new Error("Server returned an invalid workspace.");
+    expectedWorkspace = resolved;
+    identifier = String(resolved.id);
   }
-  if (response.status === 204) return undefined as T;
-  const responseBody = (await response
-    .json()
-    .catch(() => undefined)) as unknown;
+  const header = identifier === "personal" ? undefined : identifier;
+  let response = await performRequest(method, path, body, false, header);
+  if (response.status === 401 && !process.env.TODOBUD_API_KEY) {
+    response = await performRequest(method, path, body, true, header);
+  }
+  const responseBody =
+    response.status === 204
+      ? undefined
+      : ((await response.json().catch(() => undefined)) as unknown);
   if (!response.ok) {
+    const detail =
+      response.status === 404 && selection.label !== undefined
+        ? `Workspace ${JSON.stringify(selection.label)} or the requested resource is unavailable. Check --workspace, TODOBUD_WORKSPACE, or .todobud.json. `
+        : "";
     throw new APIError(
-      errorMessage(responseBody, response.status),
+      detail + errorMessage(responseBody, response.status),
       response.status,
+    );
+  }
+  if (mutation) {
+    const id = response.headers.get("X-Workspace-ID");
+    const kind = response.headers.get("X-Workspace-Kind");
+    if (id !== identifier || kind !== expectedWorkspace?.kind) {
+      throw new Error(
+        "The write succeeded but the server did not confirm the expected workspace. Verify it before retrying.",
+      );
+    }
+    const slug = response.headers.get("X-Workspace-Slug");
+    // Keep stdout valid JSON when --json is used; receipts go to stderr.
+    console.error(
+      `Workspace: ${workspaceLabel({ id: Number(id), kind: kind as Workspace["kind"], slug, name: "" })}`,
     );
   }
   return responseBody as T;
