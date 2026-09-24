@@ -1,5 +1,11 @@
 # todobud
 
+## 0.2.2
+
+### Patch Changes
+
+- 63cc71a: Fix `activities list --all` failing with "page.results is not iterable" on endpoints that return a bare array instead of a paginated envelope, and stop advertising `--page`/`--page-size` on the unpaginated activities list.
+
 ## 0.2.1
 
 ### Patch Changes
