@@ -253,3 +253,34 @@ test("compiled CLI lists resources against a mocked TodoBud API", async () => {
     server.close();
   }
 });
+
+test("compiled CLI activities list --all tolerates an unpaginated array", async () => {
+  let requests = 0;
+  const server = createServer((request, response) => {
+    assert.equal(request.url, "/api/v1/activities/");
+    requests++;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify([{ id: 5, kind: "comment" }]));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const env = {
+    TODOBUD_API_KEY: "integration-key",
+    TODOBUD_BASE_URL: `http://127.0.0.1:${address.port}`,
+    TODOBUD_DISABLE_UPDATE_CHECK: "1",
+  };
+  try {
+    const result = await runCli(["--json", "activities", "list", "--all"], env);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [{ id: 5, kind: "comment" }]);
+    assert.equal(requests, 1);
+
+    const help = await runCli(["activities", "list", "--help"], env);
+    assert.equal(help.code, 0, help.stderr);
+    assert.doesNotMatch(help.stdout, /--page/);
+    assert.match(help.stdout, /--all/);
+  } finally {
+    server.close();
+  }
+});
