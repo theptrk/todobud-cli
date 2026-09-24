@@ -157,10 +157,19 @@ export async function listAll<T>(path: string): Promise<T[]> {
   const results: T[] = [];
   let nextPath: string | null = path;
   while (nextPath) {
-    const page: Page<T> = await apiRequest<Page<T>>("GET", nextPath);
-    results.push(...page.results);
-    if (!page.next) break;
-    const nextUrl = new URL(page.next);
+    // Endpoints without a DRF pagination_class return a bare array instead of
+    // the { next, results } envelope. Treat that as a single, final page.
+    const body: Page<T> | T[] = await apiRequest<Page<T> | T[]>(
+      "GET",
+      nextPath,
+    );
+    if (Array.isArray(body)) {
+      results.push(...body);
+      break;
+    }
+    results.push(...body.results);
+    if (!body.next) break;
+    const nextUrl: URL = new URL(body.next);
     nextPath = `${nextUrl.pathname.replace(/^\/api\/v1\//, "")}${nextUrl.search}`;
   }
   return results;

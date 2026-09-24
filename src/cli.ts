@@ -207,6 +207,7 @@ export function createProgram(): Command {
     path: "activities",
     update: false,
     delete: false,
+    paginated: false,
     fields: [
       {
         flag: "todo",

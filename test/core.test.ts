@@ -138,6 +138,25 @@ test("API requests authenticate and follow pagination", async () => {
   }
 });
 
+test("listAll accepts an unpaginated bare-array response", async () => {
+  process.env.TODOBUD_API_KEY = "secret";
+  process.env.TODOBUD_BASE_URL = "https://example.com";
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (input) => {
+    calls.push(String(input));
+    return Response.json([{ id: 1 }, { id: 2 }]);
+  };
+  try {
+    assert.deepEqual(await listAll("activities/"), [{ id: 1 }, { id: 2 }]);
+    assert.deepEqual(calls, ["https://example.com/api/v1/activities/"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.TODOBUD_API_KEY;
+    delete process.env.TODOBUD_BASE_URL;
+  }
+});
+
 test("API errors never expose returned TodoBud credentials", async () => {
   process.env.TODOBUD_API_KEY = "secret";
   process.env.TODOBUD_BASE_URL = "https://example.com";

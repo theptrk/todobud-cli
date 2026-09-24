@@ -128,6 +128,7 @@ interface ResourceDefinition {
   fields?: ResourceField[];
   update?: boolean;
   delete?: boolean;
+  paginated?: boolean;
 }
 
 export function addResourceCommands(
@@ -139,18 +140,20 @@ export function addResourceCommands(
     .command(definition.command)
     .description(`Manage TodoBud ${definition.command}`);
 
-  group
-    .command("list")
-    .description(`List ${definition.command}`)
-    .option("--page <number>", "Page number")
-    .option("--page-size <number>", "Results per page (maximum 100)")
+  const list = group.command("list").description(`List ${definition.command}`);
+  if (definition.paginated !== false) {
+    list
+      .option("--page <number>", "Page number")
+      .option("--page-size <number>", "Results per page (maximum 100)");
+  }
+  list
     .option(
       "-f, --filter <key=value>",
       "API filter; repeat as needed",
       collect,
       [],
     )
-    .option("--all", "Follow pagination and return every result")
+    .option("--all", "Return every result, following pagination when present")
     .action(
       async (
         options: {
