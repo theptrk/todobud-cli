@@ -50,9 +50,11 @@ function restrictWindows(path: string, directory: boolean): void {
   const script = `
     $ErrorActionPreference = 'Stop'
     $p = [Console]::In.ReadToEnd()
-    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $sid = $identity.User
     $old = Get-Acl -LiteralPath $p
-    if ($old.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'Unexpected owner' }
+    $owner = $old.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    if ($owner -ne $sid.Value -and $owner -ne $identity.Owner.Value) { throw 'Unexpected owner' }
     $acl = New-Object System.Security.AccessControl.${directory ? "DirectorySecurity" : "FileSecurity"}
     $acl.SetOwner($sid)
     $acl.SetAccessRuleProtection($true, $false)
@@ -71,18 +73,33 @@ function restrictWindows(path: string, directory: boolean): void {
         timeout: 10_000,
       },
     );
-  } catch {
+  } catch (error) {
+    const reason = String(
+      (error as { stderr?: unknown }).stderr ?? "",
+    ).includes("Unexpected owner")
+      ? " (unexpected file owner)"
+      : "";
     throw new CredentialStoreError(
-      "Unable to enforce owner-only Windows credential access. Check your profile permissions and PowerShell availability.",
+      `Unable to enforce owner-only Windows credential access${reason}. Check your profile permissions and PowerShell availability.`,
     );
   }
 }
 
+// Revalidate each object once per process. Creation/replacement changes its
+// identity; repeated reads under the session lock need no new PowerShell
+// process. Type/link checks below still run on every access.
+const securedWindowsPaths = new Map<string, string>();
+
 export function securePath(path: string, directory = false): void {
   const stat = lstatSync(path);
   checkType(stat, directory);
-  if (process.platform === "win32") restrictWindows(path, directory);
-  else chmodSync(path, directory ? 0o700 : 0o600);
+  if (process.platform === "win32") {
+    const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+    if (securedWindowsPaths.get(path) !== identity) {
+      restrictWindows(path, directory);
+      securedWindowsPaths.set(path, identity);
+    }
+  } else chmodSync(path, directory ? 0o700 : 0o600);
 }
 
 export function ensureDirectory(path: string): void {
