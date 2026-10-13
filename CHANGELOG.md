@@ -1,5 +1,11 @@
 # todobud
 
+## 0.3.0
+
+### Minor Changes
+
+- 850f515: Support persistent auto, keyring-only, and restricted file credential storage with server-specific migration and recovery. Coordinate token refresh, login replacement, migration, and logout across CLI processes; preserve sessions and diagnostics on failed refresh or credential writes. Report active storage and distinguish unavailable stores from expired sessions.
+
 ## 0.2.2
 
 ### Patch Changes
