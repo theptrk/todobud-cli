@@ -74,11 +74,15 @@ function restrictWindows(path: string, directory: boolean): void {
       },
     );
   } catch (error) {
-    const reason = String(
-      (error as { stderr?: unknown }).stderr ?? "",
-    ).includes("Unexpected owner")
+    const diagnostic = String((error as { stderr?: unknown }).stderr ?? "");
+    const errorId = diagnostic.match(
+      /FullyQualifiedErrorId\s*:\s*([A-Za-z0-9_,.:-]+)/,
+    )?.[1];
+    const reason = diagnostic.includes("Unexpected owner")
       ? " (unexpected file owner)"
-      : "";
+      : errorId
+        ? ` (${errorId.slice(0, 160)})`
+        : "";
     throw new CredentialStoreError(
       `Unable to enforce owner-only Windows credential access${reason}. Check your profile permissions and PowerShell availability.`,
     );
