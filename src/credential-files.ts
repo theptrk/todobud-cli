@@ -15,7 +15,7 @@ import {
   writeFileSync,
   type Stats,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 export class CredentialStoreError extends Error {
   constructor(
@@ -52,20 +52,31 @@ function restrictWindows(path: string, directory: boolean): void {
     $p = [Console]::In.ReadToEnd()
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $sid = $identity.User
-    $old = Get-Acl -LiteralPath $p
+    $old = [System.IO.${directory ? "Directory" : "File"}]::GetAccessControl($p)
     $owner = $old.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
     if ($owner -ne $sid.Value -and $owner -ne $identity.Owner.Value) { throw 'Unexpected owner' }
-    $acl = New-Object System.Security.AccessControl.${directory ? "DirectorySecurity" : "FileSecurity"}
+    $acl = [System.Security.AccessControl.${directory ? "DirectorySecurity" : "FileSecurity"}]::new()
     $acl.SetOwner($sid)
     $acl.SetAccessRuleProtection($true, $false)
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', '${directory ? "ContainerInherit, ObjectInherit" : "None"}', 'None', 'Allow')
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.InheritanceFlags]'${directory ? "ContainerInherit, ObjectInherit" : "None"}', [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
     $acl.AddAccessRule($rule)
-    Set-Acl -LiteralPath $p -AclObject $acl
+    [System.IO.${directory ? "Directory" : "File"}]::SetAccessControl($p, $acl)
   `;
   try {
     execFileSync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
+      join(
+        process.env.SystemRoot ?? "C:\\Windows",
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+      ),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(script, "utf16le").toString("base64"),
+      ],
       {
         input: path,
         stdio: ["pipe", "pipe", "pipe"],
