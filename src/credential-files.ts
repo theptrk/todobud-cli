@@ -49,7 +49,7 @@ function checkType(stat: Stats, directory: boolean): void {
 function restrictWindows(path: string, directory: boolean): void {
   const script = `
     $ErrorActionPreference = 'Stop'
-    $p = [Console]::In.ReadToEnd()
+    $p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String([Console]::In.ReadToEnd()))
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $sid = $identity.User
     $old = [System.IO.${directory ? "Directory" : "File"}]::GetAccessControl($p)
@@ -61,6 +61,9 @@ function restrictWindows(path: string, directory: boolean): void {
     $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.InheritanceFlags]'${directory ? "ContainerInherit, ObjectInherit" : "None"}', [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
     $acl.AddAccessRule($rule)
     [System.IO.${directory ? "Directory" : "File"}]::SetAccessControl($p, $acl)
+    $saved = [System.IO.${directory ? "Directory" : "File"}]::GetAccessControl($p)
+    $rules = $saved.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+    if (-not $saved.AreAccessRulesProtected -or $saved.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid.Value -or $rules[0].AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $rules[0].FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { throw 'ACL verification failed' }
   `;
   try {
     execFileSync(
@@ -78,7 +81,7 @@ function restrictWindows(path: string, directory: boolean): void {
         Buffer.from(script, "utf16le").toString("base64"),
       ],
       {
-        input: path,
+        input: Buffer.from(path, "utf8").toString("base64"),
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
         timeout: 10_000,
