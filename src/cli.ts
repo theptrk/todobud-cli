@@ -11,6 +11,8 @@ import {
 } from "./auth.js";
 import { addResourceCommands } from "./resources.js";
 import { currentVersion, reportUpdate } from "./update.js";
+import { getBaseUrl } from "./config.js";
+import { changeCredentialStore, recoverCredentials } from "./credentials.js";
 
 export function createProgram(): Command {
   const program = new Command()
@@ -58,15 +60,42 @@ export function createProgram(): Command {
     .description("Log in through TodoBud in your browser")
     .option("--device", "Use the device flow for SSH or headless environments")
     .option("--no-browser", "Print the authorization URL without opening it")
-    .action(async (options: { device?: boolean; browser: boolean }) => {
-      if (options.device) await loginWithDevice(options.browser);
-      else await loginWithBrowser(options.browser);
-    });
+    .option(
+      "--storage <mode>",
+      "Persist credential storage selection: auto, keyring, or file",
+    )
+    .action(
+      async (options: {
+        device?: boolean;
+        browser: boolean;
+        storage?: string;
+      }) => {
+        if (options.device)
+          await loginWithDevice(options.browser, options.storage);
+        else await loginWithBrowser(options.browser, options.storage);
+      },
+    );
   auth
     .command("status")
     .description("Show the active authentication method")
     .action(authStatus);
   auth.command("logout").description("Revoke this CLI session").action(logout);
+  auth
+    .command("storage <mode>")
+    .description(
+      "Migrate this server's session to auto, keyring, or file storage",
+    )
+    .action(async (mode: string) => {
+      await changeCredentialStore(getBaseUrl(), mode);
+      await authStatus();
+    });
+  auth
+    .command("recover")
+    .description("Recover a restricted copy after a credential commit failed")
+    .action(async () => {
+      await recoverCredentials(getBaseUrl());
+      await authStatus();
+    });
 
   addResourceCommands(program, {
     command: "todos",

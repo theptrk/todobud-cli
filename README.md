@@ -19,8 +19,8 @@ todobud auth login
 ```
 
 The CLI opens TodoBud, receives a one-time PKCE authorization code on a
-random loopback port, and stores the resulting credentials in the operating
-system keychain. It never asks for your TodoBud password.
+random loopback port, and stores the resulting credentials using the selected
+credential backend. It never asks for your TodoBud password.
 
 For SSH and headless environments:
 
@@ -40,6 +40,85 @@ Browser sessions use 15-minute access tokens, sign out after 30 days without
 use, and always require authorization again after 90 days. Revoke this device
 with `todobud auth logout`, or revoke one or every device under **Profile →
 Authorized CLIs**.
+
+### Credential storage and recovery
+
+Storage is selected per server and persists across separate CLI processes:
+
+```sh
+todobud auth status
+todobud auth login --storage file
+todobud auth storage file
+todobud auth storage keyring
+todobud auth storage auto
+```
+
+`auth storage` migrates an accessible existing session without browser login or
+copying tokens. `auth login --storage` creates a new session and saves the mode
+only when that login is saved. Cancelling or failing authorization keeps the
+previous session. A successful replacement login saves the new session before
+revoking the previous one. If the old store cannot be read, revoke older devices
+from **Profile → Authorized CLIs**.
+
+| Mode             | Behavior                                                                                                                                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto` (default) | Uses the OS credential store for a new session and verifies the write. If the write fails (including a duplicate-item error) or cannot be read back, saves to a restricted file and reports the fallback on stderr. An existing file-backed session stays on file storage, including after Keychain access returns. |
+| `keyring`        | Requires the OS credential store; never falls back to file credentials. Local metadata and locks contain no tokens. A failed refresh save may require a new browser login.                                                                                                                                          |
+| `file`           | Reads and writes credentials in a restricted local file. Attempts to remove an old Keychain copy after migration/login and logout; inability to remove it does not change which session is active.                                                                                                                  |
+
+`TODOBUD_CREDENTIAL_STORE=auto|keyring|file` overrides the saved mode. A conflicting
+override fails rather than selecting an older credential copy or silently
+migrating on a read; unset it before using `auth storage` to change the saved
+mode. `TODOBUD_API_KEY` retains precedence for API requests and `auth status`.
+
+On Unix, credentials live under `~/.todobud/credentials/` in directories with
+mode `0700` and files with mode `0600`. On Windows the same directory is under
+`%USERPROFILE%`; the CLI enforces an owner-only DACL with Windows PowerShell
+before writing secrets. Credentials are keyed by the SHA-256 of the normalized
+server origin, independently of the working directory and workspace config.
+Files are unencrypted: treat them as passwords. No credential-directory override
+is accepted from a repository. Owned existing files have their permissions
+restricted; symlinks, hard links, foreign owners, malformed records, and
+inaccessible stores fail explicitly rather than selecting stale credentials.
+
+The per-server record is authoritative: file credentials always win over stale
+Keychain copies, and a logout marker prevents an inaccessible old copy from
+reappearing later. `auth status` reports the selected mode, active backend, file
+location when relevant, expiry/recovery state, and pending stale-copy cleanup,
+without showing tokens. Retry `auth storage` or `auth logout` from a terminal
+with Keychain access to finish pending cleanup.
+
+All session updates, migration, logout, and refresh use the same per-server OS
+file lock. The CLI re-reads credentials after acquiring it; concurrent commands
+reuse the winner's refreshed tokens. A 401 retry identifies the token that was
+rejected so it does not rotate a newer session again. Locks release on process
+exit or crash, and do not expire while a process is still running. If a command
+waits more than a minute, it reports a coordination error and leaves the session
+alone. Upgrade all CLI processes before relying on this coordination.
+
+File writes use exclusive temporary files, fsync, and atomic replacement. A
+fully written recovery record takes precedence if the final commit fails.
+If an earlier rename fails, the restricted temporary copy remains available:
+
+```sh
+todobud auth recover
+```
+
+Restore directory access first. Recovery is server-specific, validates the file,
+and refuses to overwrite a newer active session. If the directory cannot accept
+any write, or strict `keyring` storage cannot save a rotated token, the CLI
+retains the old copy and reports that the server refreshed it but persistence
+failed; it records this diagnostic when possible. A new browser login is the
+recovery path when no usable recovery copy exists. It never prints or asks you
+to copy the tokens. An `invalid_grant` response records an expired/revoked
+session without deleting its credentials, so status and logout remain useful.
+
+An unavailable store is not proof of an expired session. Agent sandboxes and
+SSH sessions can deny Keychain access or conceal an existing entry. Compare
+`auth status` in a normal terminal and the restricted environment. From a
+terminal that can read the existing session, `auth storage file` supplies a
+supported way to migrate it. The restricted environment still needs filesystem
+access to `~/.todobud` and network access to TodoBud.
 
 ## Commands
 
