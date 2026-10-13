@@ -6,8 +6,14 @@ import * as client from "openid-client";
 import { CLIENT_ID, DEFAULT_SCOPES, getBaseUrl } from "./config.js";
 import {
   deleteCredentials,
+  credentialInfo,
+  CredentialStoreError,
   loadCredentials,
+  markCredentialProblem,
+  parseCredentialStore,
   saveCredentials,
+  withCredentialLock,
+  type CredentialStore,
   type StoredCredentials,
 } from "./credentials.js";
 
@@ -25,17 +31,34 @@ function oauthConfiguration(baseUrl = getBaseUrl()): client.Configuration {
   if (new URL(baseUrl).protocol === "http:") {
     client.allowInsecureRequests(configuration);
   }
+  configuration.timeout = 30;
   return configuration;
 }
 
-function toStored(tokens: client.TokenEndpointResponse): StoredCredentials {
+function toStored(
+  tokens: client.TokenEndpointResponse,
+  previous?: StoredCredentials,
+): StoredCredentials {
+  const refreshToken = tokens.refresh_token ?? previous?.refreshToken;
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    throw new Error(
+      "The authorization server did not return a refresh token; the existing session has not been deleted.",
+    );
+  }
   const expiresIn =
-    typeof tokens.expires_in === "number" ? tokens.expires_in : 900;
+    typeof tokens.expires_in === "number" &&
+    Number.isFinite(tokens.expires_in) &&
+    tokens.expires_in > 0
+      ? tokens.expires_in
+      : 900;
   return {
     accessToken: tokens.access_token,
-    refreshToken: String(tokens.refresh_token),
+    refreshToken,
     accessExpiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
-    scope: typeof tokens.scope === "string" ? tokens.scope : DEFAULT_SCOPES,
+    scope:
+      typeof tokens.scope === "string"
+        ? tokens.scope
+        : (previous?.scope ?? DEFAULT_SCOPES),
   };
 }
 
@@ -43,16 +66,54 @@ function oauthErrorCode(error: unknown): string | undefined {
   return error instanceof client.ResponseBodyError ? error.error : undefined;
 }
 
-async function revokeExisting(
-  configuration: client.Configuration,
+function requestedStorage(storage?: string): CredentialStore | undefined {
+  const requested =
+    storage === undefined ? undefined : parseCredentialStore(storage);
+  const override = process.env.TODOBUD_CREDENTIAL_STORE;
+  if (
+    requested !== undefined &&
+    override !== undefined &&
+    parseCredentialStore(override) !== requested
+  ) {
+    throw new Error(
+      "Unset TODOBUD_CREDENTIAL_STORE before selecting a different persistent storage mode.",
+    );
+  }
+  return requested;
+}
+
+async function completeLogin(
   baseUrl: string,
+  tokens: client.TokenEndpointResponse,
+  requested?: CredentialStore,
 ): Promise<void> {
-  const existing = loadCredentials(baseUrl);
-  if (!existing) return;
-  await client.tokenRevocation(configuration, existing.refreshToken, {
-    token_type_hint: "refresh_token",
+  await withCredentialLock(baseUrl, async () => {
+    let previous: StoredCredentials | null = null;
+    try {
+      previous = loadCredentials(baseUrl);
+    } catch (error) {
+      if (!(error instanceof CredentialStoreError)) throw error;
+    }
+    const next = toStored(tokens);
+    saveCredentials(baseUrl, next, requested, true);
+    if (previous && previous.refreshToken !== next.refreshToken) {
+      try {
+        await client.tokenRevocation(
+          oauthConfiguration(baseUrl),
+          previous.refreshToken,
+          { token_type_hint: "refresh_token" },
+        );
+      } catch {
+        console.error(
+          "The new login is saved, but the previous session could not be revoked. Revoke older devices from Profile → Authorized CLIs.",
+        );
+      }
+    }
   });
-  deleteCredentials(baseUrl);
+  const info = credentialInfo(baseUrl);
+  console.log(
+    `Logged in. Credential storage: ${info.backend} (mode: ${info.mode})${info.backend === "file" ? ` at ${info.path}` : ""}.`,
+  );
 }
 
 function waitForAuthorization(
@@ -111,10 +172,15 @@ function verificationUri(
   return new URL(raw, `${baseUrl}/`).toString();
 }
 
-export async function loginWithBrowser(openBrowser = true): Promise<void> {
+export async function loginWithBrowser(
+  openBrowser = true,
+  storage?: string,
+): Promise<void> {
   const baseUrl = getBaseUrl();
   const configuration = oauthConfiguration(baseUrl);
-  await revokeExisting(configuration, baseUrl);
+  const requested = requestedStorage(storage);
+  // Check that coordination/local metadata are writable before authorization.
+  await withCredentialLock(baseUrl, async () => {});
   const verifier = client.randomPKCECodeVerifier();
   const challenge = await client.calculatePKCECodeChallenge(verifier);
   const state = client.randomState();
@@ -158,16 +224,17 @@ export async function loginWithBrowser(openBrowser = true): Promise<void> {
     },
     { redirect_uri: redirectUri },
   );
-  saveCredentials(baseUrl, toStored(tokens));
-  console.log(
-    "Logged in. Credentials are stored in your operating-system keychain.",
-  );
+  await completeLogin(baseUrl, tokens, requested);
 }
 
-export async function loginWithDevice(openBrowser = true): Promise<void> {
+export async function loginWithDevice(
+  openBrowser = true,
+  storage?: string,
+): Promise<void> {
   const baseUrl = getBaseUrl();
   const configuration = oauthConfiguration(baseUrl);
-  await revokeExisting(configuration, baseUrl);
+  const requested = requestedStorage(storage);
+  await withCredentialLock(baseUrl, async () => {});
   const device = await client.initiateDeviceAuthorization(configuration, {
     scope: DEFAULT_SCOPES,
   });
@@ -186,10 +253,7 @@ export async function loginWithDevice(openBrowser = true): Promise<void> {
     configuration,
     device,
   );
-  saveCredentials(baseUrl, toStored(tokens));
-  console.log(
-    "Logged in. Credentials are stored in your operating-system keychain.",
-  );
+  await completeLogin(baseUrl, tokens, requested);
 }
 
 async function refresh(
@@ -202,12 +266,49 @@ async function refresh(
       configuration,
       stored.refreshToken,
     );
-    const next = toStored(tokens);
-    saveCredentials(baseUrl, next);
+    const next = toStored(tokens, stored);
+    try {
+      saveCredentials(baseUrl, next);
+    } catch (error) {
+      // Keep the previous copy and a durable diagnostic when possible. Auto
+      // storage has already attempted the restricted file fallback; failed
+      // commits retain their recovery copy. Keyring-only never writes tokens
+      // to a file, even during recovery.
+      if (!(error instanceof CredentialStoreError && error.recoveryAvailable)) {
+        try {
+          markCredentialProblem(baseUrl, stored, "refresh-save-failed");
+        } catch {
+          /* Report the original save failure. */
+        }
+      }
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "Credential persistence failed.";
+      throw new CredentialStoreError(
+        `The server refreshed the session, but saving it failed. The previous session was not deleted and may no longer refresh. ${detail} Run \`todobud auth recover\` if a recovery copy was saved, or \`todobud auth login --storage file\`.`,
+      );
+    }
     return next;
   } catch (error) {
     if (oauthErrorCode(error) === "invalid_grant") {
-      deleteCredentials(baseUrl);
+      // Never delete credentials on invalid_grant. All updated clients share
+      // the lock; retain the rejected copy for status/revocation/recovery.
+      const current = loadCredentials(baseUrl);
+      if (
+        current &&
+        (current.refreshToken !== stored.refreshToken ||
+          current.accessToken !== stored.accessToken)
+      )
+        return current;
+      try {
+        markCredentialProblem(baseUrl, stored, "expired");
+      } catch {
+        /* Keep useful expiry feedback if metadata is unavailable. */
+      }
+      throw new Error(
+        "This CLI session expired or was revoked. Stored credentials were retained. Run `todobud auth login` to authorize a new session.",
+      );
     }
     throw error;
   }
@@ -215,22 +316,37 @@ async function refresh(
 
 export async function authorizationHeader(
   forceRefresh = false,
+  rejectedAuthorization?: string,
 ): Promise<string> {
   const apiKey = process.env.TODOBUD_API_KEY;
   if (apiKey) return `Api-Key ${apiKey}`;
   const baseUrl = getBaseUrl();
-  let stored = loadCredentials(baseUrl);
-  if (!stored) {
-    throw new Error(
-      "Not logged in. Run `todobud auth login` or set TODOBUD_API_KEY.",
-    );
-  }
-  if (
-    forceRefresh ||
-    Date.parse(stored.accessExpiresAt) <= Date.now() + 30_000
-  ) {
-    stored = await refresh(oauthConfiguration(baseUrl), baseUrl, stored);
-  }
+  const stored = await withCredentialLock(baseUrl, async () => {
+    // Another process may have refreshed, re-logged in, migrated, or logged
+    // out while this process waited for the lock.
+    const current = loadCredentials(baseUrl);
+    if (!current)
+      throw new Error(
+        "No accessible CLI session. Run `todobud auth login`. If already signed in from another terminal, check Keychain or agent sandbox access; `todobud auth storage file` can migrate an accessible session.",
+      );
+    const info = credentialInfo(baseUrl);
+    if (info.problem === "expired")
+      throw new Error(
+        "This CLI session expired or was revoked. Run `todobud auth login`.",
+      );
+    if (info.problem === "refresh-save-failed")
+      throw new CredentialStoreError(
+        "A previous refresh succeeded but could not be saved. Run `todobud auth recover`, or `todobud auth login --storage file`. Stored credentials were retained.",
+      );
+    const mustForce =
+      forceRefresh &&
+      current.accessToken ===
+        (rejectedAuthorization?.replace(/^Bearer /, "") ?? current.accessToken);
+    return mustForce ||
+      Date.parse(current.accessExpiresAt) <= Date.now() + 30_000
+      ? refresh(oauthConfiguration(baseUrl), baseUrl, current)
+      : current;
+  });
   return `Bearer ${stored.accessToken}`;
 }
 
@@ -241,33 +357,53 @@ export async function logout(): Promise<void> {
     );
   }
   const baseUrl = getBaseUrl();
-  const stored = loadCredentials(baseUrl);
-  if (!stored) {
-    console.log("Already logged out.");
-    return;
-  }
-  await client.tokenRevocation(
-    oauthConfiguration(baseUrl),
-    stored.refreshToken,
-    {
-      token_type_hint: "refresh_token",
-    },
-  );
-  deleteCredentials(baseUrl);
-  console.log("Logged out and revoked this CLI session.");
+  await withCredentialLock(baseUrl, async () => {
+    const stored = loadCredentials(baseUrl);
+    if (stored) {
+      await client.tokenRevocation(
+        oauthConfiguration(baseUrl),
+        stored.refreshToken,
+        { token_type_hint: "refresh_token" },
+      );
+    }
+    deleteCredentials(baseUrl);
+    console.log(
+      stored
+        ? "Logged out and revoked this CLI session."
+        : "Already logged out; stale-copy cleanup attempted.",
+    );
+  });
 }
 
-export function authStatus(): void {
+export async function authStatus(): Promise<void> {
   if (process.env.TODOBUD_API_KEY) {
     console.log("Authenticated with TODOBUD_API_KEY.");
     return;
   }
-  const stored = loadCredentials(getBaseUrl());
-  if (!stored) {
-    console.log("Not logged in.");
-    return;
-  }
-  console.log(
-    `Logged in with browser authorization (scopes: ${stored.scope}).`,
-  );
+  const baseUrl = getBaseUrl();
+  await withCredentialLock(baseUrl, async () => {
+    const stored = loadCredentials(baseUrl);
+    const info = credentialInfo(baseUrl);
+    console.log(
+      `Server: ${baseUrl}. Credential storage: ${info.backend} (mode: ${info.mode})${info.backend === "file" ? ` at ${info.path}` : ""}.`,
+    );
+    if (info.cleanupPending)
+      console.log(
+        "Stale Keychain cleanup is pending; that copy is never selected.",
+      );
+    if (!stored)
+      console.log(
+        "Not logged in. If signed in elsewhere, check credential-store or sandbox access.",
+      );
+    else if (info.problem === "expired")
+      console.log("Session expired or revoked. Run `todobud auth login`.");
+    else if (info.problem === "refresh-save-failed")
+      console.log(
+        "Refresh succeeded but could not be saved. Run `todobud auth recover` or `todobud auth login --storage file`.",
+      );
+    else
+      console.log(
+        `Logged in with browser authorization (scopes: ${stored.scope}). Access token ${Date.parse(stored.accessExpiresAt) <= Date.now() + 30_000 ? "will refresh automatically on the next request" : "is current"}.`,
+      );
+  });
 }

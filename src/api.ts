@@ -36,10 +36,9 @@ async function performRequest(
   method: string,
   path: string,
   body: JsonObject | undefined,
-  forceRefresh: boolean,
+  authorization: string,
   workspace?: string,
 ): Promise<Response> {
-  const authorization = await authorizationHeader(forceRefresh);
   return fetch(`${getBaseUrl()}/api/v1/${path.replace(/^\/+/, "")}`, {
     method,
     headers: {
@@ -84,9 +83,24 @@ export async function apiRequest<T>(
     identifier = String(resolved.id);
   }
   const header = identifier === "personal" ? undefined : identifier;
-  let response = await performRequest(method, path, body, false, header);
+  const authorization = await authorizationHeader();
+  let response = await performRequest(
+    method,
+    path,
+    body,
+    authorization,
+    header,
+  );
   if (response.status === 401 && !process.env.TODOBUD_API_KEY) {
-    response = await performRequest(method, path, body, true, header);
+    await response.body?.cancel();
+    const retryAuthorization = await authorizationHeader(true, authorization);
+    response = await performRequest(
+      method,
+      path,
+      body,
+      retryAuthorization,
+      header,
+    );
   }
   const responseBody =
     response.status === 204
